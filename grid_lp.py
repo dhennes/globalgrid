@@ -1,15 +1,15 @@
 #!/usr/bin/env python
+import pickle
 import numpy as np
 import itertools
 from scipy.io import netcdf
 
 from cvxopt import matrix, solvers
-solvers.options['show_progress'] = False
+solvers.options['show_progress'] = True
 
 import PyGMO
 
 from utils import Timer
-
 
 def powerLoss(kms):
     #assuming 800kV dC powerlines - approximataly 3.0% loss
@@ -19,28 +19,22 @@ def powerLoss(kms):
 
 
 def read_data():
-    print ">>> call: read_data()"
-    f = netcdf.netcdf_file("data_zones.nc", "r")
-    data = {}
-    #zone numbers
-    data["zones"] = f.variables['zones'][:]
-    #zone position - latitude
-    data["lats"] = f.variables['lat'][:]
-    #zone position - longtitude
-    data["lons"] = f.variables['lon'][:]
-    #time (GMT) = local solar time
-    data["time"] = f.variables['time'][:]
-    #average cloud fraction (zone,time)
-    data["clouds"] = f.variables['clouds'][:]
-    #average distance between zones (zone,zone)
-    data["distance"] = f.variables['distance'][:]
-    #average electricity demand zone (zone,time)
-    data["demand"] = f.variables['demand'][:]
-    #average solar irradiance zone (zone,time)
-    data["irradiance"] = f.variables['irradiance'][:]
+    DAY = 0
+    with open("alldata.pk", "rb") as f:
+        data = pickle.load(f)
+
+    data["irradiance"] = data["irradiance"][DAY]
+    data["clouds"] = data["clouds"][DAY]
+    
+    # reformat cloud data
+    rep = data["irradiance"].shape[-1]/data["clouds"].shape[-1]
+    clouds = np.zeros(data["irradiance"].shape)
+    for t in range(data["irradiance"].shape[-1]):
+        clouds[:, t] = data["clouds"][:, t//rep]
+    data["clouds"] = clouds
+    
     # powerloss
     data["powerloss"] = np.array(map(powerLoss, data["distance"]))
-    f.close()
     return data
 
     
@@ -52,15 +46,17 @@ class grid_linear_problem(PyGMO.problem.base):
         self.data = self.__data
 
         # flow link indecies
-        self.fidx = list(itertools.product(self.data["zones"], self.data["zones"]))
-        for item in [(x, x) for x in self.data["zones"]]:
+        ids = range(len(self.data["zones"]))
+        self.fidx = list(itertools.product(ids, ids))
+
+        for item in [(x, x) for x in ids]:
             del self.fidx[self.fidx.index(item)]
 
         # dimensions
         self.N = len(self.data["zones"])
         self.n = len(self.fidx)
         dim = self.n / 2
-            
+
         super(grid_linear_problem, self).__init__(dim, dim, 2, 0, 0, 0)
         self.set_bounds(0, 1)
         
@@ -92,7 +88,7 @@ class grid_linear_problem(PyGMO.problem.base):
     
         # A
         A_balance = np.zeros((N, N+n))
-        for i in self.data["zones"]:
+        for i, _ in enumerate(self.data["zones"]):
             # production
             A_balance[i, i] = -1 * production_coeff[i] 
             
@@ -123,7 +119,7 @@ class grid_linear_problem(PyGMO.problem.base):
         As_area = []
         As_flow = []
         bs = []
-        for t in self.data["time"]:
+        for t, _ in enumerate(self.data["time"]):
             (A, b) = self.create_sub_matrix(t, flow)
             # seperate area and flow part of sub problem
             A = A[N:, :]  # remove area_pos part
@@ -142,19 +138,15 @@ class grid_linear_problem(PyGMO.problem.base):
         A_area = np.vstack(As_area)
         A_area = np.vstack([np.identity(N) * -1, A_area])  # add area_pos constraint
 
-#        print A_area.shape
-#        print A_flow.shape
-
         A = np.hstack([A_area, A_flow])
         
         b = np.concatenate(bs)
         b = np.concatenate([np.array([0] * N), b])  # add area_pos constraints
 
-#        print A.shape
-#        print b.shape
-
         c = np.array([1.] * N + [0.] * (A.shape[1]-N))
-        
+
+        print "min: c[%s] * x subj. to A[%s] * x <= b[%s]" % (str(c.shape), str(A.shape), str(b.shape))
+                
         # solve
         A = matrix(A)
         b = matrix(b)
@@ -187,22 +179,23 @@ class grid_linear_problem(PyGMO.problem.base):
         return (f_area, f_links)
         
 if __name__ == "__main__":
-    import pickle
-    
     prob = grid_linear_problem()
     print prob
-    pop = PyGMO.population(prob, 49)
+    
+#    # fully connected
+#    pop = PyGMO.population(prob, 0)
+#    pop.push_back([True] * prob.dimension)
+#    print pop.champion.f
+
+    # random population, one fully connected
+    pop = PyGMO.population(prob, 19)
     pop.push_back([True] * prob.dimension)
     algo = PyGMO.algorithm.ihs(1)
-    for i in xrange(1000):
+    for i in xrange(100):
         with Timer(verbose=True) as t:
             pop = algo.evolve(pop)
-#        print pop.champion.f
-#        print pop.champion.x
 
         # save generation
         fname = "results/gen-%d.pickle" % i
         with open(fname, "wb") as f:
             pickle.dump(pop, f)
-        
-
