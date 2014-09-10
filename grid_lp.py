@@ -60,17 +60,24 @@ class grid_linear_problem(PyGMO.problem.base):
         super(grid_linear_problem, self).__init__(dim, dim, 2, 0, 0, 0)
         self.set_bounds(0, 1)
         
-    def powerProd(self, cloud, irradiance):
+    def power_prod(self, cloud, irradiance):
         # area in 1e6 km^2
         return .2 * irradiance * cloud / 1e6
 
-    def getTotalDist(self, flow):
+    def get_total_dist(self, flow):
         dist = 0
         upper_idx = np.triu_indices(self.N, k=1)
         upper_idx = zip(upper_idx[0], upper_idx[1])
         for i in np.nonzero(flow)[0]:
             dist += self.data["distance"][upper_idx[i][0], upper_idx[i][1]]
         return dist
+
+    def get_flow_matrix(self, x, t):
+        flow = x[self.N+t*self.n:(t+1)*self.n]
+        res = np.zeros()
+        for f, (i, j) in enumerate(self.fidx):
+            res[i, j] = f
+        return res
         
     def create_sub_matrix(self, t, flow):
         N = len(self.data["zones"])
@@ -79,7 +86,7 @@ class grid_linear_problem(PyGMO.problem.base):
         cloud = self.data["clouds"][:, t]
         irradiance = self.data["irradiance"][:, t]
         # TODO: should be moved to init
-        production_coeff = np.array(map(lambda x: self.powerProd(*x), zip(cloud, irradiance)))
+        production_coeff = np.array(map(lambda x: self.power_prod(*x), zip(cloud, irradiance)))
 
         # demand
         demand = self.data["demand"][:, t]  # in peta W
@@ -170,7 +177,7 @@ class grid_linear_problem(PyGMO.problem.base):
         if sol["status"] == "optimal":
             # objectives
             f_area = sum(sol["x"][:self.N]) 
-            f_links = self.getTotalDist(x)
+            f_links = self.get_total_dist(x)
         else:
             f_area = float("inf")
             f_links = float("inf")
