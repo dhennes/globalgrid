@@ -205,4 +205,4 @@ if __name__ == "__main__":
         # save generation
         fname = "results/gen-%d.pickle" % i
         with open(fname, "wb") as f:
-            pickle.dump(pop, f)
+            pickle.dump([(i.cur_f, i.cur_x) for i in pop], f)
